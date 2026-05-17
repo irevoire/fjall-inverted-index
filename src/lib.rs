@@ -4,14 +4,18 @@ use fiole::{
 };
 use roaring::RoaringBitmap;
 
-use crate::{error::Error, query::Query};
+use crate::{
+    error::Error,
+    key::{Key, KeyCodec, KeyKind},
+    query::Query,
+};
 
 mod error;
 mod key;
 mod query;
 
 pub struct SkipList<Value: Encode + Decode> {
-    ks: Keyspace<Value, RoaringBitmapCodec>,
+    ks: Keyspace<KeyCodec<Value>, RoaringBitmapCodec>,
 }
 
 impl<Value: Encode + Decode> SkipList<Value> {
@@ -30,24 +34,39 @@ impl<Value: Encode + Decode> SkipList<Value> {
     where
         <Value as Encode>::Item: 'a,
     {
+        // update all ids
+        let mut ids = self
+            .ks
+            .get(wtxn, &Key::All)
+            .map_err(|err| match err {
+                fiole::Error::Fjall(error) => Error::Fjall(error),
+                fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
+            })?
+            .unwrap_or_default();
+        ids.insert(docid);
+        self.ks
+            .insert(wtxn, &Key::All, &ids)
+            .map_err(|err| match err {
+                fiole::Error::Fjall(error) => Error::Fjall(error),
+                fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
+            })?;
+
+        // Insert the id in all values
         for value in values {
+            let key = Key::new(value)?;
             let mut ids = self
                 .ks
-                .get(wtxn, &value)
+                .get(wtxn, &key)
                 .map_err(|err| match err {
                     fiole::Error::Fjall(error) => Error::Fjall(error),
-                    fiole::Error::Key(encode) => Error::CouldNotEncodeValue(encode),
                     fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
                 })?
                 .unwrap_or_default();
             ids.insert(docid);
-            self.ks
-                .insert(wtxn, &value, &ids)
-                .map_err(|err| match err {
-                    fiole::Error::Fjall(error) => Error::Fjall(error),
-                    fiole::Error::Key(encode) => Error::CouldNotEncodeValue(encode),
-                    fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
-                })?;
+            self.ks.insert(wtxn, &key, &ids).map_err(|err| match err {
+                fiole::Error::Fjall(error) => Error::Fjall(error),
+                fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
+            })?;
         }
         Ok(())
     }
@@ -58,24 +77,34 @@ impl<Value: Encode + Decode> SkipList<Value> {
         query: &Query<'_, Value>,
     ) -> Result<RoaringBitmap, Error<Value>> {
         match query {
-            Query::Empty => Ok(RoaringBitmap::new()),
-            Query::All => todo!(),
+            Query::None => Ok(RoaringBitmap::new()),
+            Query::All => Ok(self
+                .ks
+                .get(rtxn, &Key::All)
+                .map_err(|err| match err {
+                    fiole::Error::Fjall(error) => Error::Fjall(error),
+                    fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
+                })?
+                .unwrap_or_default()),
             Query::Not(query) => Ok(self.query(rtxn, &Query::All)? - self.query(rtxn, &query)?),
             Query::LessThan(value) => {
                 let slice = Value::encode_alloc(value)
                     .map_err(Error::CouldNotEncodeValue)?
                     .finish();
                 self.ks
-                    .iter(rtxn)
-                    .remap_key_type::<Bytes>()
+                    .remap_key_type::<KeyKind>()
+                    .prefix(rtxn, &KeyKind::Entry)
+                    .map_err(|err| match err {})?
+                    .remap_key_type::<KeyCodec<Value>>()
                     .map(|guard| {
                         guard.into_inner().map_err(|err| match err {
                             fiole::Error::Fjall(error) => Error::Fjall(error),
                             fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
+                            fiole::Error::Key(value) => Error::CouldNotDecodeKeyTag(value),
                         })
                     })
                     // in case of error we still want to take the value to return it in the fold
-                    .take_while(|kv| kv.as_ref().map_or(true, |(key, _)| key < &slice))
+                    .take_while(|kv| kv.as_ref().map_or(true, |(key, _)| key.as_entry() < &slice))
                     .try_fold(RoaringBitmap::new(), |acc, kv| Ok(acc | kv?.1))
             }
             Query::MoreThan(value) => {
@@ -83,17 +112,20 @@ impl<Value: Encode + Decode> SkipList<Value> {
                     .map_err(Error::CouldNotEncodeValue)?
                     .finish();
                 self.ks
-                    .iter(rtxn)
-                    .remap_key_type::<Bytes>()
+                    .remap_key_type::<KeyKind>()
+                    .prefix(rtxn, &KeyKind::Entry)
+                    .map_err(|err| match err {})?
+                    .remap_key_type::<KeyCodec<Value>>()
                     .rev()
                     .map(|guard| {
                         guard.into_inner().map_err(|err| match err {
                             fiole::Error::Fjall(error) => Error::Fjall(error),
                             fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
+                            fiole::Error::Key(error) => Error::CouldNotDecodeKeyTag(error),
                         })
                     })
                     // in case of error we still want to take the value to return it in the fold
-                    .take_while(|kv| kv.as_ref().map_or(true, |(key, _)| key > &slice))
+                    .take_while(|kv| kv.as_ref().map_or(true, |(key, _)| key.as_entry() > &slice))
                     .try_fold(RoaringBitmap::new(), |acc, kv| Ok(acc | kv?.1))
             }
             Query::Equal(value) => {
@@ -164,13 +196,25 @@ mod test {
             db.ks.insert(&mut wtxn, i, [&i]).unwrap();
         }
 
+        let ret = db.ks.query(&wtxn, &Query::None).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
+
+        let ret = db.ks.query(&wtxn, &Query::All).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]>");
+
         let ret = db.ks.query(&wtxn, &Query::Equal(&5)).unwrap();
-        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[5]>");
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
 
         let ret = db.ks.query(&wtxn, &Query::LessThan(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4]>");
 
         let ret = db.ks.query(&wtxn, &Query::MoreThan(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[6, 7, 8, 9]>");
+
+        let ret = db
+            .ks
+            .query(&wtxn, &Query::Not(Box::new(Query::MoreThan(&5))))
+            .unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5]>");
     }
 }

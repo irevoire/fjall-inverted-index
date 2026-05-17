@@ -1,11 +1,12 @@
 use std::fmt;
 
-use fiole::codec::{Decode, Encode};
+use fiole::codec::{Decode, Encode, U8};
 
 pub enum Error<Codec: Encode + Decode> {
     Fjall(fjall::Error),
     CouldNotEncodeValue(<Codec as Encode>::Error),
     CouldNotDecodeValue(<Codec as Decode>::Error),
+    CouldNotDecodeKeyTag(<U8 as Decode>::Error),
     CouldNotEncodeOrDecodeRoaring,
 }
 
@@ -23,6 +24,7 @@ where
             Error::CouldNotEncodeOrDecodeRoaring => {
                 f.write_str("Internal error, could not encode or decode roaring bitmap")
             }
+            Error::CouldNotDecodeKeyTag(error) => error.fmt(f),
         }
     }
 }
@@ -44,6 +46,9 @@ where
             }
             Error::CouldNotEncodeOrDecodeRoaring => {
                 f.debug_tuple("CouldNotEncodeOrDecodeRoaring").finish()
+            }
+            Error::CouldNotDecodeKeyTag(error) => {
+                f.debug_tuple("CouldNotDecodeKeyTag").field(error).finish()
             }
         }
     }

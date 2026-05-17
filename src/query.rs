@@ -1,10 +1,10 @@
 use std::fmt;
 
-use fiole::codec::{Decode, DecodingVec, Encode};
+use fiole::codec::Encode;
 
 #[derive(Debug, Clone)]
 pub enum Query<'a, Codec: Encode> {
-    Empty,
+    None,
     All,
     Not(Box<Query<'a, Codec>>),
     LessThan(&'a Codec::Item),
@@ -18,7 +18,7 @@ impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
         Codec::Item: fmt::Display,
     {
         match self {
-            Query::Empty => Ok(format!("[EMPTY]")),
+            Query::None => Ok(format!("[EMPTY]")),
             Query::All => Ok(format!("[ALL]")),
             Query::Not(query) => Ok(format!("[NOT] {}", query.display_with()?)),
             Query::LessThan(value) => Ok(format!("[ITEM] < {value}")),
