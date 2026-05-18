@@ -87,6 +87,18 @@ impl<Value: Encode + Decode> SkipList<Value> {
                 })?
                 .unwrap_or_default()),
             Query::Not(query) => Ok(self.query(rtxn, &Query::All)? - self.query(rtxn, &query)?),
+            Query::Or(queries) => {
+                let all_len = self.query(rtxn, &Query::All)?.len();
+                let mut ret = RoaringBitmap::new();
+                for query in queries.iter() {
+                    ret |= self.query(rtxn, query)?;
+                    if ret.len() == all_len {
+                        break;
+                    }
+                }
+                Ok(ret)
+            }
+
             Query::And(queries) => {
                 let mut iter = queries.iter();
                 let mut ret = if let Some(query) = iter.next() {
@@ -244,7 +256,7 @@ mod test {
             .unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
 
-        // And with no overlap should return only the overlap
+        // And with overlap should return only the overlap
         let ret = db
             .ks
             .query(
@@ -268,5 +280,42 @@ mod test {
             )
             .unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
+
+        // --- OR
+
+        // Or with no overlap should return the addition of both parts
+        let ret = db
+            .ks
+            .query(
+                &wtxn,
+                &Query::Or(vec![Query::LessThan(&5), Query::MoreThan(&5)]),
+            )
+            .unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 6, 7, 8, 9]>");
+
+        // And with overlap should return only the result of both request
+        let ret = db
+            .ks
+            .query(
+                &wtxn,
+                &Query::Or(vec![Query::LessThan(&6), Query::MoreThan(&4)]),
+            )
+            .unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]>");
+
+        // Or with a full bitmap shouldn't even evaluate the next queries
+        let ret = db
+            .ks
+            .query(
+                &wtxn,
+                &Query::Or(vec![
+                    Query::All,
+                    Query::None,
+                    Query::LessThan(&6),
+                    Query::MoreThan(&4),
+                ]),
+            )
+            .unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]>");
     }
 }
