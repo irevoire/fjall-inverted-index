@@ -7,6 +7,7 @@ pub enum Query<'a, Codec: Encode> {
     None,
     All,
     Not(Box<Query<'a, Codec>>),
+    And(Vec<Query<'a, Codec>>),
     LessThan(&'a Codec::Item),
     MoreThan(&'a Codec::Item),
     Equal(&'a Codec::Item),
@@ -18,9 +19,20 @@ impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
         Codec::Item: fmt::Display,
     {
         match self {
-            Query::None => Ok(format!("[EMPTY]")),
+            Query::None => Ok(format!("[NONE]")),
             Query::All => Ok(format!("[ALL]")),
             Query::Not(query) => Ok(format!("[NOT] {}", query.display_with()?)),
+            Query::And(queries) => {
+                let mut output = String::new();
+                for (idx, query) in queries.iter().enumerate() {
+                    if idx != 0 {
+                        output.push_str(" [AND] ");
+                    }
+                    output.push_str(&query.display_with()?);
+                }
+
+                Ok(output)
+            }
             Query::LessThan(value) => Ok(format!("[ITEM] < {value}")),
             Query::MoreThan(value) => Ok(format!("[ITEM] > {value}",)),
             Query::Equal(value) => Ok(format!("[ITEM] = {value}",)),
