@@ -1,3 +1,5 @@
+use std::ops::Bound;
+
 use fiole::{
     codec::{Bytes, Decode, Encode, RoaringBitmapCodec, Unspecified},
     Keyspace, Readable, Wtxn,
@@ -7,12 +9,13 @@ use roaring::RoaringBitmap;
 use crate::{
     error::Error,
     key::{Key, KeyCodec, KeyKind},
-    query::Query,
 };
 
 mod error;
 mod key;
 mod query;
+
+pub use query::Query;
 
 pub struct SkipList<Value: Encode + Decode> {
     ks: Keyspace<KeyCodec<Value>, RoaringBitmapCodec>,
@@ -98,7 +101,6 @@ impl<Value: Encode + Decode> SkipList<Value> {
                 }
                 Ok(ret)
             }
-
             Query::And(queries) => {
                 let mut iter = queries.iter();
                 let mut ret = if let Some(query) = iter.next() {
@@ -169,6 +171,48 @@ impl<Value: Encode + Decode> SkipList<Value> {
                     })
                     .map(|bitmap| bitmap.unwrap_or_default())
             }
+            Query::Range((start, end)) => {
+                let start = match start {
+                    Bound::Included(start) => Bound::Included(
+                        Value::encode_alloc(start)
+                            .map_err(Error::CouldNotEncodeValue)?
+                            .into_fjall_slice(),
+                    ),
+                    Bound::Excluded(start) => Bound::Excluded(
+                        Value::encode_alloc(start)
+                            .map_err(Error::CouldNotEncodeValue)?
+                            .into_fjall_slice(),
+                    ),
+                    Bound::Unbounded => Bound::Unbounded,
+                };
+                let end = match end {
+                    Bound::Included(end) => Bound::Included(
+                        Value::encode_alloc(end)
+                            .map_err(Error::CouldNotEncodeValue)?
+                            .into_fjall_slice(),
+                    ),
+                    Bound::Excluded(end) => Bound::Excluded(
+                        Value::encode_alloc(end)
+                            .map_err(Error::CouldNotEncodeValue)?
+                            .into_fjall_slice(),
+                    ),
+                    Bound::Unbounded => Bound::Unbounded,
+                };
+                self.ks
+                    .remap_key_type::<KeyCodec<Bytes>>()
+                    .range(rtxn, &(start.map(Key::Entry), end.map(Key::Entry)))
+                    .map_err(|err| match err {})?
+                    .remap_key_type::<KeyCodec<Bytes>>()
+                    .map(|guard| {
+                        println!("Called on somethin");
+                        guard.into_inner().map_err(|err| match err {
+                            fiole::Error::Fjall(error) => Error::Fjall(error),
+                            fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
+                            fiole::Error::Key(error) => Error::CouldNotDecodeKeyTag(error),
+                        })
+                    })
+                    .try_fold(RoaringBitmap::new(), |acc, kv| Ok(acc | kv?.1))
+            }
         }
     }
 }
@@ -230,6 +274,21 @@ mod test {
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]>");
 
         let ret = db.ks.query(&wtxn, &Query::Equal(&5)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
+
+        let ret = db.ks.query(&wtxn, &Query::range(&4..=&5)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[4, 5]>");
+
+        let ret = db.ks.query(&wtxn, &Query::range(&4..&5)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[4]>");
+
+        let ret = db.ks.query(&wtxn, &Query::range(&4..&4)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
+
+        let ret = db.ks.query(&wtxn, &Query::range(&4..=&4)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[4]>");
+
+        let ret = db.ks.query(&wtxn, &Query::range(&4..=&3)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
 
         let ret = db.ks.query(&wtxn, &Query::LessThan(&5)).unwrap();

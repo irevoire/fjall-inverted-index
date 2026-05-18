@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    fmt,
+    ops::{Bound, RangeBounds},
+};
 
 use fiole::codec::Encode;
 
@@ -12,6 +15,13 @@ pub enum Query<'a, Codec: Encode> {
     LessThan(&'a Codec::Item),
     MoreThan(&'a Codec::Item),
     Equal(&'a Codec::Item),
+    Range((Bound<&'a Codec::Item>, Bound<&'a Codec::Item>)),
+}
+
+impl<'a, Codec: Encode> Query<'a, Codec> {
+    pub fn range<R: RangeBounds<&'a Codec::Item> + 'a>(range: R) -> Self {
+        Query::Range((range.start_bound().cloned(), range.end_bound().cloned()))
+    }
 }
 
 impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
@@ -48,6 +58,21 @@ impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
             Query::LessThan(value) => Ok(format!("[ITEM] < {value}")),
             Query::MoreThan(value) => Ok(format!("[ITEM] > {value}",)),
             Query::Equal(value) => Ok(format!("[ITEM] = {value}",)),
+            Query::Range((start, end)) => {
+                let mut ret = String::new();
+                match start {
+                    Bound::Included(start) => ret.push_str(&format!("{start}")),
+                    Bound::Excluded(start) => ret.push_str(&format!("{start}-")),
+                    Bound::Unbounded => (),
+                }
+                ret.push_str("..");
+                match end {
+                    Bound::Included(end) => ret.push_str(&format!("={end}")),
+                    Bound::Excluded(end) => ret.push_str(&format!("{end}")),
+                    Bound::Unbounded => (),
+                }
+                Ok(ret)
+            }
         }
     }
 }
