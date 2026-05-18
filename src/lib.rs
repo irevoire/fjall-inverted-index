@@ -117,10 +117,12 @@ impl<Value: Encode + Decode> SkipList<Value> {
                 Ok(ret)
             }
             Query::LessThan(value) => self.query(rtxn, &Query::range(..value)),
+            Query::LessThanOrEqual(value) => self.query(rtxn, &Query::range(..=value)),
             Query::MoreThan(value) => self.query(
                 rtxn,
                 &Query::range((Bound::Excluded(value), Bound::Unbounded)),
             ),
+            Query::MoreThanOrEqual(value) => self.query(rtxn, &Query::range(value..)),
             Query::Equal(value) => {
                 let slice = Value::encode_alloc(value)
                     .map_err(Error::CouldNotEncodeValue)?
@@ -287,8 +289,14 @@ mod test {
         let ret = db.ks.query(&wtxn, &Query::LessThan(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4]>");
 
+        let ret = db.ks.query(&wtxn, &Query::LessThanOrEqual(&5)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5]>");
+
         let ret = db.ks.query(&wtxn, &Query::MoreThan(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[6, 7, 8, 9]>");
+
+        let ret = db.ks.query(&wtxn, &Query::MoreThanOrEqual(&5)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[5, 6, 7, 8, 9]>");
 
         let ret = db
             .ks

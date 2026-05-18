@@ -13,7 +13,9 @@ pub enum Query<'a, Codec: Encode> {
     Or(Vec<Query<'a, Codec>>),
     And(Vec<Query<'a, Codec>>),
     LessThan(&'a Codec::Item),
+    LessThanOrEqual(&'a Codec::Item),
     MoreThan(&'a Codec::Item),
+    MoreThanOrEqual(&'a Codec::Item),
     Equal(&'a Codec::Item),
     Range((Bound<&'a Codec::Item>, Bound<&'a Codec::Item>)),
 }
@@ -56,7 +58,9 @@ impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
                 Ok(output)
             }
             Query::LessThan(value) => Ok(format!("[ITEM] < {value}")),
+            Query::LessThanOrEqual(value) => Ok(format!("[ITEM] <= {value}")),
             Query::MoreThan(value) => Ok(format!("[ITEM] > {value}",)),
+            Query::MoreThanOrEqual(value) => Ok(format!("[ITEM] >= {value}",)),
             Query::Equal(value) => Ok(format!("[ITEM] = {value}",)),
             Query::Range((start, end)) => {
                 let mut ret = String::new();
