@@ -116,47 +116,11 @@ impl<Value: Encode + Decode> SkipList<Value> {
                 }
                 Ok(ret)
             }
-            Query::LessThan(value) => {
-                let slice = Value::encode_alloc(value)
-                    .map_err(Error::CouldNotEncodeValue)?
-                    .finish();
-                self.ks
-                    .remap_key_type::<KeyKind>()
-                    .prefix(rtxn, &KeyKind::Entry)
-                    .map_err(|err| match err {})?
-                    .remap_key_type::<KeyCodec<Value>>()
-                    .map(|guard| {
-                        guard.into_inner().map_err(|err| match err {
-                            fiole::Error::Fjall(error) => Error::Fjall(error),
-                            fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
-                            fiole::Error::Key(value) => Error::CouldNotDecodeKeyTag(value),
-                        })
-                    })
-                    // in case of error we still want to take the value to return it in the fold
-                    .take_while(|kv| kv.as_ref().map_or(true, |(key, _)| key.as_entry() < &slice))
-                    .try_fold(RoaringBitmap::new(), |acc, kv| Ok(acc | kv?.1))
-            }
-            Query::MoreThan(value) => {
-                let slice = Value::encode_alloc(value)
-                    .map_err(Error::CouldNotEncodeValue)?
-                    .finish();
-                self.ks
-                    .remap_key_type::<KeyKind>()
-                    .prefix(rtxn, &KeyKind::Entry)
-                    .map_err(|err| match err {})?
-                    .remap_key_type::<KeyCodec<Value>>()
-                    .rev()
-                    .map(|guard| {
-                        guard.into_inner().map_err(|err| match err {
-                            fiole::Error::Fjall(error) => Error::Fjall(error),
-                            fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
-                            fiole::Error::Key(error) => Error::CouldNotDecodeKeyTag(error),
-                        })
-                    })
-                    // in case of error we still want to take the value to return it in the fold
-                    .take_while(|kv| kv.as_ref().map_or(true, |(key, _)| key.as_entry() > &slice))
-                    .try_fold(RoaringBitmap::new(), |acc, kv| Ok(acc | kv?.1))
-            }
+            Query::LessThan(value) => self.query(rtxn, &Query::range(..value)),
+            Query::MoreThan(value) => self.query(
+                rtxn,
+                &Query::range((Bound::Excluded(value), Bound::Unbounded)),
+            ),
             Query::Equal(value) => {
                 let slice = Value::encode_alloc(value)
                     .map_err(Error::CouldNotEncodeValue)?
