@@ -174,33 +174,56 @@ impl<Value: Encode + Decode> SkipList<Value> {
             Query::Range((start, end)) => {
                 let start = match start {
                     Bound::Included(start) => Bound::Included(
-                        Value::encode_alloc(start)
-                            .map_err(Error::CouldNotEncodeValue)?
-                            .into_fjall_slice(),
+                        KeyCodec::encode_alloc(&Key::<Value>::Entry(
+                            Value::encode_alloc(&start)
+                                .map_err(Error::CouldNotEncodeValue)?
+                                .into_fjall_slice(),
+                        ))
+                        .map_err(|err| match err {})?
+                        .finish(),
                     ),
                     Bound::Excluded(start) => Bound::Excluded(
-                        Value::encode_alloc(start)
-                            .map_err(Error::CouldNotEncodeValue)?
-                            .into_fjall_slice(),
+                        KeyCodec::encode_alloc(&Key::<Value>::Entry(
+                            Value::encode_alloc(&start)
+                                .map_err(Error::CouldNotEncodeValue)?
+                                .into_fjall_slice(),
+                        ))
+                        .map_err(|err| match err {})?
+                        .finish(),
                     ),
-                    Bound::Unbounded => Bound::Unbounded,
+                    Bound::Unbounded => Bound::Included(vec![KeyKind::Entry as u8]),
                 };
                 let end = match end {
                     Bound::Included(end) => Bound::Included(
-                        Value::encode_alloc(end)
-                            .map_err(Error::CouldNotEncodeValue)?
-                            .into_fjall_slice(),
+                        KeyCodec::encode_alloc(&Key::<Value>::Entry(
+                            Value::encode_alloc(&end)
+                                .map_err(Error::CouldNotEncodeValue)?
+                                .into_fjall_slice(),
+                        ))
+                        .map_err(|err| match err {})?
+                        .finish(),
                     ),
                     Bound::Excluded(end) => Bound::Excluded(
-                        Value::encode_alloc(end)
-                            .map_err(Error::CouldNotEncodeValue)?
-                            .into_fjall_slice(),
+                        KeyCodec::encode_alloc(&Key::<Value>::Entry(
+                            Value::encode_alloc(&end)
+                                .map_err(Error::CouldNotEncodeValue)?
+                                .into_fjall_slice(),
+                        ))
+                        .map_err(|err| match err {})?
+                        .finish(),
                     ),
-                    Bound::Unbounded => Bound::Unbounded,
+                    Bound::Unbounded => Bound::Excluded(vec![KeyKind::FinalKind as u8]),
                 };
+
                 self.ks
-                    .remap_key_type::<KeyCodec<Bytes>>()
-                    .range(rtxn, &(start.map(Key::Entry), end.map(Key::Entry)))
+                    .remap_key_type::<Bytes>()
+                    .range(
+                        rtxn,
+                        &(
+                            start.as_ref().map(|s| s.as_slice()),
+                            end.as_ref().map(|s| s.as_slice()),
+                        ),
+                    )
                     .map_err(|err| match err {})?
                     .remap_key_type::<KeyCodec<Bytes>>()
                     .map(|guard| {
@@ -290,6 +313,12 @@ mod test {
 
         let ret = db.ks.query(&wtxn, &Query::range(&4..=&3)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
+
+        let ret = db.ks.query(&wtxn, &Query::range(..&5)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4]>");
+
+        let ret = db.ks.query(&wtxn, &Query::range(&6..)).unwrap();
+        insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[6, 7, 8, 9]>");
 
         let ret = db.ks.query(&wtxn, &Query::LessThan(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4]>");

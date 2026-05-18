@@ -5,9 +5,11 @@ use fiole::codec::{Bytes, ComposeCodec, Decode, DecodingVec, Encode, EncodingVec
 use crate::error::Error;
 
 #[derive(Debug, Copy, Clone)]
+#[repr(u8)]
 pub(crate) enum KeyKind {
     All = 0,
     Entry = 1,
+    FinalKind = 255,
 }
 
 impl Encode for KeyKind {
