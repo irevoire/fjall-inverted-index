@@ -6,12 +6,12 @@ use std::{
 use fiole::codec::Encode;
 
 #[derive(Debug, Clone)]
-pub enum Query<'a, Codec: Encode> {
+pub enum Filter<'a, Codec: Encode> {
     None,
     All,
-    Not(Box<Query<'a, Codec>>),
-    Or(Vec<Query<'a, Codec>>),
-    And(Vec<Query<'a, Codec>>),
+    Not(Box<Filter<'a, Codec>>),
+    Or(Vec<Filter<'a, Codec>>),
+    And(Vec<Filter<'a, Codec>>),
     LessThan(&'a Codec::Item),
     LessThanOrEqual(&'a Codec::Item),
     MoreThan(&'a Codec::Item),
@@ -20,22 +20,22 @@ pub enum Query<'a, Codec: Encode> {
     Range((Bound<&'a Codec::Item>, Bound<&'a Codec::Item>)),
 }
 
-impl<'a, Codec: Encode> Query<'a, Codec> {
+impl<'a, Codec: Encode> Filter<'a, Codec> {
     pub fn range<R: RangeBounds<&'a Codec::Item> + 'a>(range: R) -> Self {
-        Query::Range((range.start_bound().cloned(), range.end_bound().cloned()))
+        Filter::Range((range.start_bound().cloned(), range.end_bound().cloned()))
     }
 }
 
-impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
+impl<'a, Codec: Encode + fmt::Display> Filter<'a, Codec> {
     pub fn display_with(&self) -> Result<String, Codec::Error>
     where
         Codec::Item: fmt::Display,
     {
         match self {
-            Query::None => Ok(format!("[NONE]")),
-            Query::All => Ok(format!("[ALL]")),
-            Query::Not(query) => Ok(format!("[NOT] {}", query.display_with()?)),
-            Query::Or(queries) => {
+            Filter::None => Ok(format!("[NONE]")),
+            Filter::All => Ok(format!("[ALL]")),
+            Filter::Not(query) => Ok(format!("[NOT] {}", query.display_with()?)),
+            Filter::Or(queries) => {
                 let mut output = String::new();
                 for (idx, query) in queries.iter().enumerate() {
                     if idx != 0 {
@@ -46,7 +46,7 @@ impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
 
                 Ok(output)
             }
-            Query::And(queries) => {
+            Filter::And(queries) => {
                 let mut output = String::new();
                 for (idx, query) in queries.iter().enumerate() {
                     if idx != 0 {
@@ -57,12 +57,12 @@ impl<'a, Codec: Encode + fmt::Display> Query<'a, Codec> {
 
                 Ok(output)
             }
-            Query::LessThan(value) => Ok(format!("[ITEM] < {value}")),
-            Query::LessThanOrEqual(value) => Ok(format!("[ITEM] <= {value}")),
-            Query::MoreThan(value) => Ok(format!("[ITEM] > {value}",)),
-            Query::MoreThanOrEqual(value) => Ok(format!("[ITEM] >= {value}",)),
-            Query::Equal(value) => Ok(format!("[ITEM] = {value}",)),
-            Query::Range((start, end)) => {
+            Filter::LessThan(value) => Ok(format!("[ITEM] < {value}")),
+            Filter::LessThanOrEqual(value) => Ok(format!("[ITEM] <= {value}")),
+            Filter::MoreThan(value) => Ok(format!("[ITEM] > {value}",)),
+            Filter::MoreThanOrEqual(value) => Ok(format!("[ITEM] >= {value}",)),
+            Filter::Equal(value) => Ok(format!("[ITEM] = {value}",)),
+            Filter::Range((start, end)) => {
                 let mut ret = String::new();
                 match start {
                     Bound::Included(start) => ret.push_str(&format!("{start}")),

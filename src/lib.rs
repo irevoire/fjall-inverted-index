@@ -15,7 +15,7 @@ mod error;
 mod key;
 mod query;
 
-pub use query::Query;
+pub use query::Filter;
 
 pub struct SkipList<Value: Encode + Decode> {
     ks: Keyspace<KeyCodec<Value>, RoaringBitmapCodec>,
@@ -74,14 +74,14 @@ impl<Value: Encode + Decode> SkipList<Value> {
         Ok(())
     }
 
-    pub fn query(
+    pub fn filter(
         &self,
         rtxn: &impl Readable,
-        query: &Query<'_, Value>,
+        query: &Filter<'_, Value>,
     ) -> Result<RoaringBitmap, Error<Value>> {
         match query {
-            Query::None => Ok(RoaringBitmap::new()),
-            Query::All => Ok(self
+            Filter::None => Ok(RoaringBitmap::new()),
+            Filter::All => Ok(self
                 .ks
                 .get(rtxn, &Key::All)
                 .map_err(|err| match err {
@@ -89,22 +89,22 @@ impl<Value: Encode + Decode> SkipList<Value> {
                     fiole::Error::Value(_) => Error::CouldNotEncodeOrDecodeRoaring,
                 })?
                 .unwrap_or_default()),
-            Query::Not(query) => Ok(self.query(rtxn, &Query::All)? - self.query(rtxn, &query)?),
-            Query::Or(queries) => {
-                let all_len = self.query(rtxn, &Query::All)?.len();
+            Filter::Not(query) => Ok(self.filter(rtxn, &Filter::All)? - self.filter(rtxn, &query)?),
+            Filter::Or(queries) => {
+                let all_len = self.filter(rtxn, &Filter::All)?.len();
                 let mut ret = RoaringBitmap::new();
                 for query in queries.iter() {
-                    ret |= self.query(rtxn, query)?;
+                    ret |= self.filter(rtxn, query)?;
                     if ret.len() == all_len {
                         break;
                     }
                 }
                 Ok(ret)
             }
-            Query::And(queries) => {
+            Filter::And(queries) => {
                 let mut iter = queries.iter();
                 let mut ret = if let Some(query) = iter.next() {
-                    self.query(rtxn, query)?
+                    self.filter(rtxn, query)?
                 } else {
                     RoaringBitmap::new()
                 };
@@ -112,18 +112,18 @@ impl<Value: Encode + Decode> SkipList<Value> {
                     if ret.is_empty() {
                         break;
                     }
-                    ret &= self.query(rtxn, query)?;
+                    ret &= self.filter(rtxn, query)?;
                 }
                 Ok(ret)
             }
-            Query::LessThan(value) => self.query(rtxn, &Query::range(..value)),
-            Query::LessThanOrEqual(value) => self.query(rtxn, &Query::range(..=value)),
-            Query::MoreThan(value) => self.query(
+            Filter::LessThan(value) => self.filter(rtxn, &Filter::range(..value)),
+            Filter::LessThanOrEqual(value) => self.filter(rtxn, &Filter::range(..=value)),
+            Filter::MoreThan(value) => self.filter(
                 rtxn,
-                &Query::range((Bound::Excluded(value), Bound::Unbounded)),
+                &Filter::range((Bound::Excluded(value), Bound::Unbounded)),
             ),
-            Query::MoreThanOrEqual(value) => self.query(rtxn, &Query::range(value..)),
-            Query::Equal(value) => {
+            Filter::MoreThanOrEqual(value) => self.filter(rtxn, &Filter::range(value..)),
+            Filter::Equal(value) => {
                 let slice = Value::encode_alloc(value)
                     .map_err(Error::CouldNotEncodeValue)?
                     .finish();
@@ -137,7 +137,7 @@ impl<Value: Encode + Decode> SkipList<Value> {
                     })
                     .map(|bitmap| bitmap.unwrap_or_default())
             }
-            Query::Range((start, end)) => {
+            Filter::Range((start, end)) => {
                 let start = match start {
                     Bound::Included(start) => Bound::Included(
                         KeyCodec::encode_alloc(&Key::<Value>::Entry(
@@ -217,7 +217,7 @@ mod test {
     use fjall::KeyspaceCreateOptions;
     use tempfile::TempDir;
 
-    use crate::{query::Query, SkipList};
+    use crate::{query::Filter, SkipList};
 
     struct TestDb<Value: Encode + Decode> {
         db: fiole::Database,
@@ -256,51 +256,51 @@ mod test {
             db.ks.insert(&mut wtxn, i, [&i]).unwrap();
         }
 
-        let ret = db.ks.query(&wtxn, &Query::None).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::None).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
 
-        let ret = db.ks.query(&wtxn, &Query::All).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::All).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]>");
 
-        let ret = db.ks.query(&wtxn, &Query::Equal(&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::Equal(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
 
-        let ret = db.ks.query(&wtxn, &Query::range(&4..=&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::range(&4..=&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[4, 5]>");
 
-        let ret = db.ks.query(&wtxn, &Query::range(&4..&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::range(&4..&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[4]>");
 
-        let ret = db.ks.query(&wtxn, &Query::range(&4..&4)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::range(&4..&4)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
 
-        let ret = db.ks.query(&wtxn, &Query::range(&4..=&4)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::range(&4..=&4)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[4]>");
 
-        let ret = db.ks.query(&wtxn, &Query::range(&4..=&3)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::range(&4..=&3)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
 
-        let ret = db.ks.query(&wtxn, &Query::range(..&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::range(..&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4]>");
 
-        let ret = db.ks.query(&wtxn, &Query::range(&6..)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::range(&6..)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[6, 7, 8, 9]>");
 
-        let ret = db.ks.query(&wtxn, &Query::LessThan(&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::LessThan(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4]>");
 
-        let ret = db.ks.query(&wtxn, &Query::LessThanOrEqual(&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::LessThanOrEqual(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5]>");
 
-        let ret = db.ks.query(&wtxn, &Query::MoreThan(&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::MoreThan(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[6, 7, 8, 9]>");
 
-        let ret = db.ks.query(&wtxn, &Query::MoreThanOrEqual(&5)).unwrap();
+        let ret = db.ks.filter(&wtxn, &Filter::MoreThanOrEqual(&5)).unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[5, 6, 7, 8, 9]>");
 
         let ret = db
             .ks
-            .query(&wtxn, &Query::Not(Box::new(Query::MoreThan(&5))))
+            .filter(&wtxn, &Filter::Not(Box::new(Filter::MoreThan(&5))))
             .unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5]>");
 
@@ -309,9 +309,9 @@ mod test {
         // And with no overlap should return nothing
         let ret = db
             .ks
-            .query(
+            .filter(
                 &wtxn,
-                &Query::And(vec![Query::LessThan(&5), Query::MoreThan(&5)]),
+                &Filter::And(vec![Filter::LessThan(&5), Filter::MoreThan(&5)]),
             )
             .unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[]>");
@@ -319,9 +319,9 @@ mod test {
         // And with overlap should return only the overlap
         let ret = db
             .ks
-            .query(
+            .filter(
                 &wtxn,
-                &Query::And(vec![Query::LessThan(&6), Query::MoreThan(&4)]),
+                &Filter::And(vec![Filter::LessThan(&6), Filter::MoreThan(&4)]),
             )
             .unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[5]>");
@@ -329,13 +329,13 @@ mod test {
         // And with an empty bitmap shouldn't even evaluate the next queries
         let ret = db
             .ks
-            .query(
+            .filter(
                 &wtxn,
-                &Query::And(vec![
-                    Query::None,
-                    Query::All,
-                    Query::LessThan(&6),
-                    Query::MoreThan(&4),
+                &Filter::And(vec![
+                    Filter::None,
+                    Filter::All,
+                    Filter::LessThan(&6),
+                    Filter::MoreThan(&4),
                 ]),
             )
             .unwrap();
@@ -346,9 +346,9 @@ mod test {
         // Or with no overlap should return the addition of both parts
         let ret = db
             .ks
-            .query(
+            .filter(
                 &wtxn,
-                &Query::Or(vec![Query::LessThan(&5), Query::MoreThan(&5)]),
+                &Filter::Or(vec![Filter::LessThan(&5), Filter::MoreThan(&5)]),
             )
             .unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 6, 7, 8, 9]>");
@@ -356,9 +356,9 @@ mod test {
         // And with overlap should return only the result of both request
         let ret = db
             .ks
-            .query(
+            .filter(
                 &wtxn,
-                &Query::Or(vec![Query::LessThan(&6), Query::MoreThan(&4)]),
+                &Filter::Or(vec![Filter::LessThan(&6), Filter::MoreThan(&4)]),
             )
             .unwrap();
         insta::assert_debug_snapshot!(ret, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]>");
@@ -366,13 +366,13 @@ mod test {
         // Or with a full bitmap shouldn't even evaluate the next queries
         let ret = db
             .ks
-            .query(
+            .filter(
                 &wtxn,
-                &Query::Or(vec![
-                    Query::All,
-                    Query::None,
-                    Query::LessThan(&6),
-                    Query::MoreThan(&4),
+                &Filter::Or(vec![
+                    Filter::All,
+                    Filter::None,
+                    Filter::LessThan(&6),
+                    Filter::MoreThan(&4),
                 ]),
             )
             .unwrap();
